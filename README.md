@@ -9,6 +9,30 @@ growth and its anomalies.
 Everything the interactive dashboard shows is also a **headless command** emitting
 text / json / csv, so an LLM agent can drive the whole tool without a terminal.
 
+## Installation
+
+```sh
+# Install the latest release (static musl on Linux, native on macOS) into ~/.local/bin
+curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/get-ssa.sh | bash
+
+# A specific version
+curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/get-ssa.sh | bash -s v0.1.0
+
+# glibc build instead of musl, or a custom install dir
+curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/get-ssa.sh | bash -s -- --gnu --bin-dir /usr/local/bin
+```
+
+Prebuilt binaries (`x86_64`/`aarch64`, Linux gnu+musl and macOS) are published on every
+`v*` tag by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+Or build from source (requires Rust 1.85+):
+
+```sh
+git clone https://github.com/maleus-ai/session-analyzer.git
+cd session-analyzer
+./install.sh            # cargo build --release, then install `ssa` into ~/.local/bin
+```
+
 ## Build
 
 ```sh
