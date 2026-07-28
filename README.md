@@ -22,8 +22,20 @@ curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/g
 curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/get-ssa.sh | bash -s -- --gnu --bin-dir /usr/local/bin
 ```
 
-Prebuilt binaries (`x86_64`/`aarch64`, Linux gnu+musl and macOS) are published on every
-`v*` tag by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+If Claude Code is installed, the installer offers to register `SKILL.md` as a global skill
+(`~/.claude/skills/analyze-claude-sessions/`) so Claude Code knows how to drive `ssa`. It
+only asks when a terminal is attached, so piped and CI installs never block — decide up
+front with a flag:
+
+```sh
+… | bash -s -- --skill        # install the skill without asking
+… | bash -s -- --no-skill     # never install it
+SSA_INSTALL_SKILL=yes …       # same, via the environment
+```
+
+Prebuilt binaries (`x86_64`/`aarch64` Linux gnu+musl, and Apple Silicon macOS) are published
+on every `v*` tag by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+Intel macOS is not built — build from source if you need it.
 
 Or build from source (requires Rust 1.85+):
 

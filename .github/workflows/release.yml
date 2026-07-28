@@ -88,6 +88,8 @@ jobs:
           mkdir -p "$STAGING"
           cp "target/${TARGET}/release/ssa" "$STAGING/"
           cp install.sh "$STAGING/"
+          # install.sh offers to register this as a Claude Code skill, so it must ship.
+          cp SKILL.md "$STAGING/"
           cp README.md "$STAGING/" 2>/dev/null || true
 
           tar czf "$TARBALL" "$STAGING"

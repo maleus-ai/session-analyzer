@@ -31,6 +31,12 @@ Arguments:
 Options:
   --gnu             Use the glibc (gnu) build instead of static musl (Linux only)
   --bin-dir DIR     Install into DIR (forwarded to install.sh; default ~/.local/bin)
+  --skill           Also install the Claude Code skill, without asking
+  --no-skill        Never install the Claude Code skill, and do not ask
+
+A piped install has no terminal, so it never prompts and never installs the skill unless
+you ask for it — pass --skill (or set SSA_INSTALL_SKILL=yes) to opt in from CI, and
+--no-skill to be explicit that you do not want it.
 
 Examples:
   curl -sSfL https://raw.githubusercontent.com/${REPO}/master/get-ssa.sh | bash
@@ -48,6 +54,9 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     --gnu)     USE_GNU=true; shift ;;
     --bin-dir) INSTALL_ARGS+=(--bin-dir "${2:?--bin-dir needs a value}"); shift 2 ;;
+    # Forwarded verbatim; listed explicitly so --help documents them and a typo is caught
+    # here rather than passed through as an unknown install.sh option.
+    --skill|--no-skill) INSTALL_ARGS+=("$1"); shift ;;
     v*)        if [[ -z "$VERSION" ]]; then VERSION="$1"; else INSTALL_ARGS+=("$1"); fi; shift ;;
     *)         INSTALL_ARGS+=("$1"); shift ;;
   esac

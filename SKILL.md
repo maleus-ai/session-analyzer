@@ -1,19 +1,41 @@
 ---
 name: analyze-claude-sessions
 description: >
-  Use ssa to investigate token consumption, cost, cache efficiency,
-  context growth, sub-agents and token sinks in Claude Code (and other agent-harness)
-  session logs. Trigger when asked "why did this session cost so much / burn my
-  subscription / grow so large", "where are the token sinks", "what did this session do",
-  or to compare/aggregate many sessions and projects. Works headless (text/json/csv) so
-  it can be driven entirely from the command line.
+  Use ssa to investigate what an agent session actually DID and why it went wrong, and
+  what it cost, from Claude Code (and other agent-harness) session logs. Two kinds of
+  question, both first-class. BEHAVIOUR: why a run stopped or produced no answer, turn/token
+  limits hit, runs that were cut off mid-generation, delegation loops and runaway sub-agent
+  recursion, the same tool call repeated, a capability the agent needed and the harness did
+  not provide, which sub-agent did what, reading or searching a transcript across every
+  sub-agent, and post-incident root-cause analysis. COST: token consumption, cache
+  efficiency and churn, context growth and spikes, token sinks, subscription/rate pressure,
+  and comparing or aggregating many sessions and projects. It is equally strong on both —
+  cost work includes ranking token sinks by amplified cost (size x turns resident),
+  decomposing cache-read by the content that stayed in context, per-run cost, and rolling
+  rate-window pressure. Trigger on "why did this session fail / stop / hang / loop / do
+  nothing", "what went wrong in this session", "analyse this session log or .claude
+  capture", "why did it keep spawning agents", "what tools did the agent have", "why did
+  this cost so much / burn my subscription", "reduce the cost", "where are the token sinks",
+  "compare these sessions", "what did this session do". Takes a whole .claude tree or a
+  .zip/.tar.gz archive as well as individual .jsonl files, reconstructs each sub-agent as
+  its own thread, and also packages a capture for sharing without leaking credentials or
+  audits one you were handed. Works headless (text/json/csv), plus an interactive TUI.
 ---
 
 # Analyzing agent session logs with `ssa` (session-analyzer)
 
-`ssa` reads raw session logs and answers *how many* tokens were spent,
-**where**, and **why**. Every view is a headless subcommand emitting `text`/`json`/`csv`,
-so you can script it and parse the JSON.
+`ssa` reads raw session logs and answers two different kinds of question:
+
+- **What happened, and why did it go wrong** — how each run ended, whether the agent ever
+  answered, delegation loops, repeated calls, capabilities it needed and could not reach,
+  and what any sub-agent did. This is the side to reach for when a session *failed*, not
+  just when it was expensive.
+- **What it cost** — tokens by bucket, cache efficiency, context growth, token sinks and
+  subscription pressure.
+
+Every view is a headless subcommand emitting `text`/`json`/`csv`, so you can script it and
+parse the JSON. **A session can fail without costing much, and cost a lot without failing —
+do not assume the question is about money.**
 
 ## Build & invoke
 
@@ -182,6 +204,28 @@ not always the JSON keys. Check here before writing a parser:
 Header → key mismatches worth knowing: `agents` prints `TYPE`/`TOKENS` but emits
 `agent_type` and `usage.{input,output,…}_tokens`; assistant transcript items carry both
 `turn` (session-wide sequence) and `turn_label` (per-thread, what's printed).
+
+## Start here — pick by symptom
+
+The recipes below are lettered, not ordered by importance. Route from the symptom:
+
+| the user says… | start with | recipe |
+|---|---|---|
+| "it went wrong", "something broke", or nothing specific | `issues` then `runs` | **G** |
+| "it never answered / produced nothing" | `runs`, then `trace --thread main` | **G** |
+| "it stopped / hit a limit / was cut off" | `runs` | **G**, **I** |
+| "it looped / repeated itself / kept spawning agents" | `issues`, then `agents` | **F**, **H** |
+| "it couldn't do X" | `tools --available` | **E2** |
+| "what did it actually do?" | `trace`, then `transcript` | **C** |
+| "find where X was discussed" | `search` | **E** |
+| "why so expensive / which sessions burn my quota" | `pressure`, then `overview` | **A** |
+| "where are the token sinks" | `sinks`, then `cache-attr` | **B** |
+| handed a `.claude` capture by someone else | `audit` **first** | — |
+
+**When in doubt, run `ssa issues --session <id>` first.** It reports control-flow failures
+(how runs ended, delegation loops, repeated calls, missing capabilities) *and* cost
+findings in one pass, and names the command that verifies each one. It is the single best
+entry point for "something went wrong and I don't know what".
 
 ## Analysis recipes
 
