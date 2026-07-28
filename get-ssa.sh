@@ -66,8 +66,12 @@ detect_target() {
       esac ;;
     Darwin)
       case "$arch" in
-        x86_64) echo "x86_64-apple-darwin" ;;
         arm64)  echo "aarch64-apple-darwin" ;;
+        # No Intel build is published. Say so plainly — otherwise this resolves to a
+        # target that simply 404s, and an Apple Silicon binary cannot run here.
+        x86_64)
+          error "Intel macOS is no longer published. Build from source: cargo build --release"
+          exit 1 ;;
         *) error "Unsupported architecture: $arch"; exit 1 ;;
       esac ;;
     *) error "Unsupported OS: $os"; exit 1 ;;

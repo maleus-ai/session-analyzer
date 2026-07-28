@@ -32,12 +32,9 @@ jobs:
           - target: aarch64-unknown-linux-musl
             runner: blacksmith-4vcpu-ubuntu-2204-arm
             musl: true
-          # Blacksmith macOS is Apple Silicon (M4/ARM64) only — build aarch64 natively and
-          # cross-compile the x86_64 binary on the same runner (Apple's toolchain + pure-Rust
-          # deps make this a no-op beyond `rustup target add`).
+          # Apple Silicon only. Intel macOS is not built: GitHub is retiring its Intel
+          # runners and Blacksmith offers Apple Silicon only, same call as kepler-master.
           - target: aarch64-apple-darwin
-            runner: blacksmith-6vcpu-macos-15
-          - target: x86_64-apple-darwin
             runner: blacksmith-6vcpu-macos-15
 
     runs-on: ${{ matrix.runner }}
