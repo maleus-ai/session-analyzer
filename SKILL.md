@@ -127,6 +127,7 @@ then read the hits with the same flags:
 | `--agent SUBSTR` | only sub-agents whose **id, type or description** matches (implies `--thread sub`) |
 | `--depth N` / `--min-depth N` | only sub-agents at exactly / at least that nesting level (implies `--thread sub`) |
 | `--tool NAME` | messages that call that tool or carry its result |
+| `--errors-only` | only failures: tool results that errored, and assistant turns that hit an API error. `tools` reports error *counts*; this is how you read them |
 | `--input-grep TEXT` | match the tool **input** (the prompt handed to an Agent, the command given to Bash) |
 | `--regex` | treat `--grep` / `--input-grep` as case-insensitive regular expressions |
 | `--run N` | only messages in run N (see `ssa runs`) |

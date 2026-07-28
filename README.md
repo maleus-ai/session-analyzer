@@ -1,13 +1,16 @@
 # session-analyzer
 
-A Rust **TUI + CLI** for deep analysis of **token consumption** in agent session logs.
-Point it at raw session logs (a folder, a single `.jsonl`, a `.zip`, or a `~/.claude`
-project tree) and it shows *how many* tokens were spent, **where**, and **why** — per
-message, per tool, per turn — plus cache (in)efficiency, the real token sinks, context
-growth and its anomalies.
+A Rust TUI and CLI for analysing agent session logs. It answers two kinds of question:
 
-Everything the interactive dashboard shows is also a **headless command** emitting
-text / json / csv, so an LLM agent can drive the whole tool without a terminal.
+- **What the session did, and why it went wrong.** How each run ended, whether the agent
+  ever answered, delegation loops, repeated tool calls, capabilities the agent needed and
+  could not reach, and what each sub-agent did.
+- **What it cost.** Tokens by bucket, cache efficiency, context growth, token sinks and
+  subscription pressure.
+
+Input is a folder, a single `.jsonl`, an archive (`.zip`/`.tar`/`.tar.gz`/`.tgz`), or a
+`~/.claude` project tree. Every view is also a headless command emitting text, JSON or CSV,
+so an LLM agent can drive the whole tool without a terminal.
 
 ## Installation
 
@@ -23,9 +26,8 @@ curl -sSfL https://raw.githubusercontent.com/maleus-ai/session-analyzer/master/g
 ```
 
 If Claude Code is installed, the installer offers to register `SKILL.md` as a global skill
-(`~/.claude/skills/analyze-claude-sessions/`) so Claude Code knows how to drive `ssa`. It
-only asks when a terminal is attached, so piped and CI installs never block — decide up
-front with a flag:
+(`~/.claude/skills/analyze-claude-sessions/`). It only asks when a terminal is attached, so
+piped and CI installs do not block. Decide up front with a flag:
 
 ```sh
 … | bash -s -- --skill        # install the skill without asking
@@ -35,7 +37,7 @@ SSA_INSTALL_SKILL=yes …       # same, via the environment
 
 Prebuilt binaries (`x86_64`/`aarch64` Linux gnu+musl, and Apple Silicon macOS) are published
 on every `v*` tag by [`.github/workflows/release.yml`](.github/workflows/release.yml).
-Intel macOS is not built — build from source if you need it.
+Intel macOS is not built; build from source if you need it.
 
 Or build from source (requires Rust 1.85+):
 
@@ -82,8 +84,8 @@ every working directory in the tree.
 
 Parsing is behind a `Provider` trait, so other agent harnesses can be supported later.
 The provider is auto-detected from the logs; force one with `--provider claude-code`.
-Adding a harness = implement `Provider` in `src/providers/` and register it — everything
-downstream (analysis, TUI, CLI) is provider-agnostic.
+Adding a harness means implementing `Provider` in `src/providers/` and registering it.
+Everything downstream (analysis, TUI, CLI) is provider-agnostic.
 
 ## Commands (CLI = TUI parity)
 
@@ -98,33 +100,31 @@ downstream (analysis, TUI, CLI) is provider-agnostic.
 | `compare` | 2+ sessions side by side (repeat `--session`) |
 | `tools` | per-tool calls, result-token footprint, errors (`--available` for the tool roster) |
 | `audit <capture>` | inspect an archive you were handed for leaked credentials |
-| `runs` / `trace` | per-run outcomes; one line per turn (`--depth`/`--min-depth` to slice a chain) |
 | `sinks` | token sinks ranked by **amplified cost** (size × turns resident) |
 | `cache-attr` | decomposition of cache-read by the content that stayed resident |
 | `subagents` | per sub-agent tokens, tool counts, reads/edits, lines changed (agents that finished) |
 | `agents` | every sub-agent conversation, finished or not: id, type, depth, turns, timing, outcome |
-| `runs` | the session's runs (SDK query / prompt cycle) and how each ended — incl. turn-limit hits |
-| `trace --session ID` | one line per turn: time, thread, tools called — the "what did it do" view |
+| `runs` | the session's runs (one SDK query each) and how each ended, including turn-limit hits |
+| `trace --session ID` | one line per turn: time, thread, turn, output tokens, tools called |
 | `timeline --session ID` | per-turn context size, Δctx, write/read/out, cost, spikes |
 | `growth --session ID` | context-growth sparkline + detected spikes |
 | `spikes` | anomalous context-growth turns + their cause |
 | `search --grep TEXT` | find messages across every session **and sub-agent**; prints locators |
 | `transcript --session ID` | ordered bubbles (user/assistant/tool/compact) with tokens, sub-agents nested |
 | `show --session ID --item N` | full text of one transcript item (msg / tool io) |
-| `issues [--session ID]` | detected inefficiencies **and control-flow failures** (run outcomes, delegation loops) |
+| `issues [--session ID]` | detected inefficiencies and control-flow failures (run outcomes, delegation loops, unavailable tools) |
 | `tar <provider>` | package session logs into a shareable `.tar.gz`, **excluding credentials** |
 
-Common flags: `--format text\|json\|csv`, `--session <id-prefix>`, `--sort <col>`,
-`--desc`, `--top N`, `--provider <id>`. Sort columns per view are listed in `src/query.rs`
-(e.g. sinks: `amplified|size|calls|residency|contribution`).
+Common flags: `--format text\|json\|csv`, `--session <id-prefix>`, `--sort <col>`, `--asc`
+(default is descending), `--top N`, `--provider <id>`. Run `ssa <command> --help` for the
+authoritative flag list and valid sort columns.
 
-`search`, `transcript` and `trace` share a selection vocabulary: `--grep TEXT`,
-`--input-grep TEXT` (tool arguments), `--regex`, `--kind
-user\|assistant\|tool\|compact\|event`, `--thread all\|main\|sub`,
-`--agent <id/type/description>`, `--tool <name>`, `--run N`, `--since`/`--until`
-(`HH:MM[:SS]` or `YYYY-MM-DD HH:MM`), `--from N` / `--limit N` (paging by item index),
-`--context N` (messages around each hit), and `--full` (complete text, `transcript` only).
-So:
+`search`, `transcript` and `trace` share one filter set: `--grep TEXT`, `--input-grep TEXT`
+(tool arguments), `--regex`, `--kind user\|assistant\|tool\|compact\|event`,
+`--thread all\|main\|sub`, `--agent <id/type/description>`, `--depth N` / `--min-depth N`,
+`--tool <name>`, `--errors-only`, `--run N`, `--since` / `--until` (`HH:MM[:SS]` or
+`YYYY-MM-DD HH:MM`, UTC), `--from N` / `--limit N` (paging by item index), `--context N`
+(messages around each hit), and `--full` (complete text, `transcript` only).
 
 ```sh
 ssa runs -p LOG --session 14574d2b                        # how did each run end
@@ -136,18 +136,16 @@ ssa agents -p LOG --session 14574d2b                      # what was delegated t
 ssa transcript -p LOG --session 14574d2b --agent Explore --full
 ```
 
-The old `--cli --report <section>` form still works as a deprecated alias.
-
 ## TUI
 
 Tabs: **Overview · Sessions · Transcript · Timeline · Tools · Sinks · Cache-attr ·
-Sub-agents · Issues · Rate**. Transcript/Timeline are per-session — open one from Sessions.
+Sub-agents · Issues · Rate**. Transcript and Timeline are per-session; open one from Sessions.
 The **Rate** tab shows throughput over wall-clock time and the peak rolling window.
 
-Overview leads with how each **run** ended and any tool the agent asked for and could not
-get; **Tools** flags those unavailable tools above the usage table; **Sub-agents** lists
-every delegated conversation in chain order with its depth and outcome. All of it mirrors
-the headless commands (`runs`, `tools --available`, `agents`).
+Overview shows per-run outcomes and any tool the agent requested that the harness did not
+provide. Tools flags those unavailable tools above the usage table. Sub-agents lists every
+delegated conversation in chain order with depth and outcome. These mirror the `runs`,
+`tools --available` and `agents` commands.
 
 **Keyboard**: `←/→` or `1`–`9`/`0` switch tabs (`0` = Rate) · `↑/↓` move · `PgUp/PgDn` page ·
 `[` / `]` change sort column · `r` reverse sort · `Enter` drill into a session /
@@ -155,42 +153,41 @@ expand a transcript bubble · `/` search the transcript (`n`/`N` next/prev) · `
 `q` quit.
 
 In the **Transcript**, each sub-agent is collapsed to a single summary row (turns, tokens,
-cost, outcome). `Enter` on it opens that conversation as its own transcript with a
-breadcrumb (`main ▸ Explore#a221ec`); `Esc` walks back out one level. `a` switches to a flat
-view with every thread inline. The **Timeline** plots the main thread and sub-agents as
-separate series, because each has its own context window — a merged line makes an agent
-starting and finishing look like a compaction that never happened.
+cost, outcome). `Enter` opens that conversation as its own transcript with a breadcrumb
+(`main ▸ Explore#a221ec`), `Esc` exits one level, and `a` switches to a flat view with every
+thread inline. The **Timeline** plots main-thread and sub-agent turns as separate series,
+since each thread has its own context window.
 
 **Mouse**: click a tab, click a **column header** to sort (click again to reverse),
 click a row to select, scroll wheel to move/scroll, click a bubble to expand.
 
-## What it measures — and the ideas behind it
+## What it measures
 
 - **Token totals** split into fresh input, cache **write**, cache **read**, output, with
   an estimated USD cost from per-model list pricing (Opus / Sonnet / Haiku).
-- **Cache efficiency**: hit rate (share of input served from cache) and *churn*
-  (writes ÷ reads — high churn = caches expire before paying off).
-- **Amplified sinks / cache-read attribution** — the key idea. Cache-read is usually the
-  dominant cost, and it equals *every resident block replayed every turn it stays in
-  context*. A block of `T` tokens resident for `R` turns contributes `T×R` to cache-read.
-  So the tool decomposes total cache-read by source (reconciling to ~100%) and ranks
-  sinks by **amplified cost** — revealing the file read once early and never evicted that
-  quietly cost more than any one-off big result.
-- **Context growth & spikes**: per-turn context size forms a growth curve (with
-  compaction sawtooth resets); turns whose jump exceeds `mean + 2σ` are flagged as
-  **spikes**, attributed to what was added just before them.
-- **Transcript**: full ordered messages with per-message token stats, so you can read a
-  session and see exactly where writes/reads/sinks occur.
-- **Sub-agents**: every sub-agent conversation — finished or not — with nesting depth,
+- **Cache efficiency**: hit rate (share of input served from cache) and churn
+  (writes / reads; high churn means caches expire before paying off).
+- **Amplified sinks and cache-read attribution.** Cache-read equals every resident block
+  replayed on every turn it stays in context: a block of `T` tokens resident for `R` turns
+  contributes `T×R`. Total cache-read is decomposed by source (reconciling to ~100%) and
+  sinks are ranked by amplified cost, which surfaces content read once early and never
+  evicted.
+- **Context growth and spikes**: per-turn context size forms a growth curve, tracked per
+  thread. Turns whose jump exceeds `mean + 2σ` are flagged as spikes and attributed to what
+  was added just before them.
+- **Transcript**: ordered messages with per-message token stats.
+- **Sub-agents**: every sub-agent conversation, finished or not, with nesting depth,
   outcome, duration and the transcript range to read it.
-- **Thread attribution**: sub-agent logs carry the *parent's* `sessionId`, so every message
-  is tagged with the agent that produced it and nested under the turn that spawned it —
-  main-thread turns are numbered 1..N and each sub-agent restarts at 1.
-- **Control flow**: the session's runs and how each ended (clean finish, turn/token limit,
-  ended mid-generation, API error), read from the harness `attachment` records that carry
-  markers like `max_turns_reached`.
+- **Thread attribution**: sub-agent logs carry the parent's `sessionId`, so each message is
+  tagged with the agent that produced it and nested under the turn that spawned it.
+  Main-thread turns are numbered 1..N and each sub-agent restarts at 1.
+- **Control flow**: the session's runs and how each ended (clean finish, turn or token
+  limit, ended mid-generation, API error), read from the harness `attachment` records that
+  carry markers such as `max_turns_reached`.
+- **Tool availability**: the deferred tool registry, and every capability an agent requested
+  via `ToolSearch` that the harness did not provide.
 - **Inefficiencies**: low cache hit, churn, repeated reads, cache-read sinks, context
-  spikes, tool/API errors, auto-compactions, heavy sub-agents, **delegation loops** and
+  spikes, tool and API errors, auto-compactions, heavy sub-agents, delegation loops, and
   identical tool calls repeated.
 
 ## Token accounting notes
