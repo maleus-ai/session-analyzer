@@ -20,20 +20,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Every job runs on Blacksmith, matching kepler-master. Linux aarch64 builds
+          # natively on an -arm runner rather than cross-compiling from x86.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
+            runner: blacksmith-4vcpu-ubuntu-2204
           - target: x86_64-unknown-linux-musl
-            runner: ubuntu-22.04
+            runner: blacksmith-4vcpu-ubuntu-2204
             musl: true
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
           - target: aarch64-unknown-linux-musl
-            runner: ubuntu-22.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2204-arm
             musl: true
-          - target: x86_64-apple-darwin
-            runner: macos-13
+          # Blacksmith macOS is Apple Silicon (M4/ARM64) only — build aarch64 natively and
+          # cross-compile the x86_64 binary on the same runner (Apple's toolchain + pure-Rust
+          # deps make this a no-op beyond `rustup target add`).
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: blacksmith-6vcpu-macos-15
+          - target: x86_64-apple-darwin
+            runner: blacksmith-6vcpu-macos-15
 
     runs-on: ${{ matrix.runner }}
 
@@ -100,7 +105,7 @@ jobs:
   release:
     needs: build
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
