@@ -1,7 +1,8 @@
 //! Overview page: headline stats, token composition bars and cache-read attribution.
 
-use crate::analysis::{RATE_WINDOW_HOURS, TurnPoint, fmt_int, rate_report, short_path};
+use crate::analysis::{Outcome, RATE_WINDOW_HOURS, TurnPoint, fmt_int, rate_report, short_path};
 use crate::tui::app::App;
+use crate::tui::theme;
 use crate::tui::format::{kv, kv_bold, kv_val, section_line, truncate};
 use crate::tui::widgets::bars::comp_line;
 use ratatui::prelude::*;
@@ -50,10 +51,16 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         kv("Provider", &app.info.provider_name),
         kv("Harness (entry)", &harness(app)),
         kv("Wall-clock span", &m.duration_human()),
-        kv("Active time", &format!("{}  ({} idle >15m)", human(rr.active_ms), rr.idle_gaps)),
+        // Same honesty as the CLI: a pause under the 15-minute rate-window threshold must
+        // not let a session read as continuous.
+        kv("Active time", &format!("{}  ({} paused, max {})", human(rr.active_ms), human(rr.idle_ms), human(rr.longest_gap_ms))),
         kv("Peak turns/min", &format!("{}  (max concurrent subagents {})", fmt_int(rr.peak_turns_per_min), m.max_concurrent_subagents)),
         kv("Assistant turns", &fmt_int(m.assistant_turns)),
-        kv("User prompts", &fmt_int(m.user_prompts)),
+        kv("User prompts", &if m.subagent_prompts > 0 {
+            format!("{}  (+{} sub-agent tasks)", fmt_int(m.user_prompts), fmt_int(m.subagent_prompts))
+        } else {
+            fmt_int(m.user_prompts)
+        }),
         kv("Tool calls", &fmt_int(m.tool_calls)),
         kv("Context peak", &fmt_int(m.context_peak)),
         Line::from(""),
@@ -73,11 +80,56 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         }),
         kv("Peak 5h fresh", &fmt_int(rr.peak_window_fresh)),
     ];
+    // How the work ended, and what it could reach — the two questions asked first when a
+    // session goes wrong, and the ones the CLI already answers.
+    let runs: Vec<&crate::analysis::RunSegment> = match app.focus {
+        Some(i) => app.a.sessions[i].runs.iter().collect(),
+        None => app.a.sessions.iter().flat_map(|s| s.runs.iter()).collect(),
+    };
+    if !runs.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_line("RUNS  (turn limits apply per run)"));
+        for r in runs.iter().take(6) {
+            let color = match r.outcome {
+                Outcome::LimitHit => theme::BAD,
+                Outcome::Truncated | Outcome::Errored => theme::WARN,
+                Outcome::Completed => theme::GOOD,
+            };
+            lines.push(kv_val(
+                &format!("Run {}", r.index),
+                &format!("{} turns · ${:.2} · {}", r.turns_main, r.cost_usd, r.outcome.label()),
+                color,
+            ));
+            if !r.outcome_detail.is_empty() {
+                lines.push(kv("", &format!("  {}", truncate(&r.outcome_detail, 52))));
+            }
+        }
+    }
+    if !m.tools_unavailable.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(section_line("TOOLS REQUESTED BUT UNAVAILABLE"));
+        for (name, n) in m.tools_unavailable.iter().take(4) {
+            lines.push(kv_val(name, &format!("searched {n}×, never provided"), theme::BAD));
+        }
+    }
     if m.has_sidechain_detail {
         lines.push(Line::from(""));
         lines.push(section_line("MAIN vs SUB-AGENT"));
         lines.push(kv("Main-thread turns", &format!("{} ({} tok)", fmt_int(m.turns_main), fmt_int(m.usage_main.total()))));
         lines.push(kv("Sub-agent turns", &format!("{} ({} tok)", fmt_int(m.turns_sidechain), fmt_int(m.usage_sidechain.total()))));
+        // "1" alone reads as "delegation was minimal" beside a deep chain.
+        let threads: Vec<&crate::analysis::AgentThread> = match app.focus {
+            Some(i) => app.a.sessions[i].threads.iter().collect(),
+            None => app.a.sessions.iter().flat_map(|s| s.threads.iter()).collect(),
+        };
+        if !threads.is_empty() {
+            let depth = threads.iter().map(|t| t.agent.depth).max().unwrap_or(0);
+            lines.push(kv_val(
+                "Sub-agents",
+                &format!("{} finished / {} total · max depth {}", m.subagents.len(), threads.len(), depth),
+                if depth >= 4 { theme::BAD } else { Color::Gray },
+            ));
+        }
     } else if !m.subagents.is_empty() {
         lines.push(Line::from(""));
         lines.push(section_line("SUB-AGENTS"));

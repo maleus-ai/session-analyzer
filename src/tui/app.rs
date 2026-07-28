@@ -17,7 +17,7 @@ pub(crate) fn tab_cols(tab: usize) -> &'static [&'static str] {
         4 => query::TOOL_COLS,
         5 => query::SINK_COLS,
         6 => query::CACHEATTR_COLS,
-        7 => query::SUBAGENT_COLS,
+        7 => query::AGENT_COLS,
         _ => &[],
     }
 }
@@ -29,12 +29,12 @@ pub(crate) fn disp_map(tab: usize) -> &'static [Option<&'static str>] {
     match tab {
         // COST TOTAL TURNS ACTIVE_H IDLE ENTRY MODEL TITLE
         1 => &[Some("cost"), Some("tokens"), Some("turns"), Some("duration"), None, None, None, None],
-        3 => &[Some("turn"), Some("context"), Some("delta"), Some("write"), None, Some("cost"), None, None],
+        3 => &[Some("turn"), None, Some("context"), Some("delta"), Some("write"), None, Some("cost"), None, None],
         4 => &[Some("name"), Some("calls"), Some("result"), Some("input"), Some("errors")],
         5 => &[Some("amplified"), Some("size"), Some("contribution"), None, Some("calls"), None, None],
         6 => &[Some("share"), None, Some("contribution"), Some("contribution"), Some("entries"), None],
-        // TYPE MODEL TOKENS TOOLS READ SRCH BASH EDIT ±LINES SECS
-        7 => &[None, None, Some("tokens"), Some("tools"), Some("reads"), None, None, Some("edits"), None, Some("duration")],
+        // AGENT TYPE D MODEL TURNS TOKENS COST TOOLS DUR OUTCOME DESCRIPTION
+        7 => &[Some("seq"), None, Some("depth"), None, Some("turns"), Some("tokens"), Some("cost"), Some("tools"), Some("duration"), None, None],
         _ => &[],
     }
 }
@@ -52,12 +52,21 @@ fn titem_search_text(it: &TItem) -> String {
         }
         TKind::Tool { tool, target, content, .. } => format!("{tool} {target}\n{content}"),
         TKind::Compact { trigger, .. } => trigger.clone(),
+        TKind::Event { subtype, detail, content, .. } => format!("{subtype} {detail}\n{content}"),
     }
 }
 
 /// A modal overlay. `Transcript` holds a transcript item index; `Turn` holds a 1-based
 /// timeline turn number; `Detail` holds the tab + selected (sorted) row index of a table
 /// whose row was opened for details.
+/// One row of the Transcript tab: a message, or a collapsed sub-agent conversation.
+#[derive(Clone)]
+pub(crate) enum TRow {
+    Item(usize),
+    /// A sub-agent, shown as a single summary row until opened.
+    Agent(String),
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum Popup {
     Transcript(usize),
@@ -83,6 +92,12 @@ pub(crate) struct App<'a> {
     /// Transcript search: the query, and whether we're currently typing it.
     pub search: String,
     pub search_active: bool,
+    /// Transcript: which thread is open. Empty = the main conversation; each entry is a
+    /// sub-agent id one level deeper. A delegated conversation is collapsed to a single row
+    /// until you step into it, so a 54-deep chain reads as one line instead of 169 bubbles.
+    pub t_scope: Vec<String>,
+    /// Transcript: show every thread inline instead of collapsing sub-agents (`a`).
+    pub flatten: bool,
     // Hit-test geometry captured each frame while views draw.
     pub tab_hits: Vec<(u16, u16, usize)>,
     pub header_hits: Vec<(u16, u16, usize)>,
@@ -99,7 +114,13 @@ impl<'a> App<'a> {
             focus: None,
             sel: [0; NTABS],
             sort_col: [0; NTABS],
-            sort_desc: [true; NTABS],
+            // Sub-agents defaults to ascending `seq`, i.e. the order the delegation chain
+            // actually happened in — the same default the CLI uses.
+            sort_desc: {
+                let mut d = [true; NTABS];
+                d[7] = false;
+                d
+            },
             scroll: 0,
             t_offset: 0,
             row_offset: [0; NTABS],
@@ -107,6 +128,8 @@ impl<'a> App<'a> {
             popup_scroll: 0,
             search: String::new(),
             search_active: false,
+            t_scope: Vec::new(),
+            flatten: false,
             tab_hits: Vec::new(),
             header_hits: Vec::new(),
             row0: 0,
@@ -125,15 +148,55 @@ impl<'a> App<'a> {
     pub fn focus_report(&self) -> Option<&SessionReport> {
         self.focus.map(|i| &self.a.sessions[i])
     }
+
+    /// What the Transcript tab shows: the messages of the currently open thread, with each
+    /// sub-agent it spawns collapsed to one row that can be stepped into.
+    pub fn transcript_view(&self) -> Vec<TRow> {
+        let Some(sr) = self.focus_report() else { return Vec::new() };
+        if self.flatten {
+            return (0..sr.transcript.len()).map(TRow::Item).collect();
+        }
+        let scope = self.t_scope.last().map(String::as_str);
+        let mut out = Vec::new();
+        for (i, it) in sr.transcript.iter().enumerate() {
+            if it.agent.as_ref().map(|a| a.id.as_str()) != scope {
+                continue;
+            }
+            out.push(TRow::Item(i));
+            // A spawn is followed by the child's whole conversation; stand in for it with
+            // one row rather than inlining a thread that may itself be 50 levels deep.
+            if let TKind::Assistant { tools, .. } = &it.kind {
+                for t in tools {
+                    if let Some(child) = &t.spawned {
+                        out.push(TRow::Agent(child.clone()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Breadcrumb for the open thread, e.g. `main ▸ general-purpose#a9e9a6 ▸ …`.
+    pub fn scope_path(&self) -> String {
+        let Some(sr) = self.focus_report() else { return "main".into() };
+        let mut parts = vec!["main".to_string()];
+        for id in &self.t_scope {
+            parts.push(sr.threads.iter().find(|t| &t.agent.id == id).map(|t| t.agent.label()).unwrap_or_else(|| id.clone()));
+        }
+        parts.join(" ▸ ")
+    }
+
     pub fn list_len(&self) -> usize {
         match self.tab {
             1 => self.a.sessions.len(),
-            2 => self.focus_report().map_or(0, |s| s.transcript.len()),
+            2 => self.transcript_view().len(),
             3 => self.focus_report().map_or(0, |s| s.timeline.len()),
             4 => self.metrics().tools.len(),
             5 => query::sinks_only(self.cache_attr()).len(),
             6 => self.cache_attr().len(),
-            7 => self.metrics().subagents.len(),
+            // The thread roster, not the result records: an agent that never returned has
+            // no result record but is still a row.
+            7 => crate::tui::views::subagents::threads(self).len(),
             8 => self.metrics().findings.len(),
             _ => 0,
         }
@@ -226,10 +289,22 @@ impl<'a> App<'a> {
             }
             KeyCode::Char('n') if self.tab == 2 && !self.search.is_empty() => self.jump_transcript(1),
             KeyCode::Char('N') if self.tab == 2 && !self.search.is_empty() => self.jump_transcript(-1),
+            // Toggle between the collapsed (per-thread) transcript and one flat stream.
+            KeyCode::Char('a') if self.tab == 2 => {
+                self.flatten = !self.flatten;
+                self.t_scope.clear();
+                self.sel[2] = 0;
+                self.t_offset = 0;
+            }
             KeyCode::Enter => self.activate(),
+            // Esc walks back out of a sub-agent before it leaves the session.
             KeyCode::Esc => {
                 if !self.search.is_empty() {
                     self.search.clear();
+                } else if self.tab == 2 && !self.t_scope.is_empty() {
+                    self.t_scope.pop();
+                    self.sel[2] = 0;
+                    self.t_offset = 0;
                 } else {
                     self.focus = None;
                 }
@@ -247,11 +322,15 @@ impl<'a> App<'a> {
             return;
         }
         let Some(sr) = self.focus_report() else { return };
-        let n = sr.transcript.len();
+        let view = self.transcript_view();
+        let n = view.len();
         if n == 0 {
             return;
         }
-        let matches = |i: usize| titem_search_text(&sr.transcript[i]).to_lowercase().contains(&q);
+        let matches = |i: usize| match &view[i] {
+            TRow::Item(t) => titem_search_text(&sr.transcript[*t]).to_lowercase().contains(&q),
+            TRow::Agent(_) => false,
+        };
         let cur = self.sel[2];
         let hit = (1..=n).find_map(|step| {
             let i = if dir >= 0 {
@@ -357,14 +436,20 @@ impl<'a> App<'a> {
                     self.t_offset = 0;
                 }
             }
-            2 => {
-                if let Some(sr) = self.focus_report() {
-                    if self.sel[2] < sr.transcript.len() {
-                        self.popup = Some(Popup::Transcript(self.sel[2]));
-                        self.popup_scroll = 0;
-                    }
+            2 => match self.transcript_view().get(self.sel[2]).cloned() {
+                // Enter on a message expands it; on a collapsed sub-agent it steps into that
+                // conversation, which is what makes a deep chain navigable at all.
+                Some(TRow::Item(i)) => {
+                    self.popup = Some(Popup::Transcript(i));
+                    self.popup_scroll = 0;
                 }
-            }
+                Some(TRow::Agent(id)) => {
+                    self.t_scope.push(id);
+                    self.sel[2] = 0;
+                    self.t_offset = 0;
+                }
+                None => {}
+            },
             3 => {
                 // The per-turn list is sorted; resolve the selection to its turn number.
                 let turn = self.focus.and_then(|fi| {

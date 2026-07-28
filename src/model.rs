@@ -64,6 +64,21 @@ impl ToolUse {
     }
 }
 
+/// Which conversation thread a record belongs to.
+///
+/// Claude Code writes each sub-agent's turns to its own `.jsonl` (under
+/// `<session>/subagents/`) but stamps them with the **parent** `sessionId`, so this flag is
+/// the only thing separating a sub-agent's messages from the main thread's. Every event
+/// carries it — an unattributed record would render as if the main agent had said it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Origin {
+    /// True for sub-agent (sidechain) records rather than the main conversation thread.
+    pub is_sidechain: bool,
+    /// Sub-agent id for sidechain records (links to `SubagentResult.agent_id`); empty on
+    /// the main thread.
+    pub agent_id: String,
+}
+
 /// One assistant turn (a single API response).
 #[derive(Debug, Clone)]
 pub struct AssistantMsg {
@@ -73,11 +88,10 @@ pub struct AssistantMsg {
     pub text: String,
     pub tools: Vec<ToolUse>,
     pub is_error: bool,
-    /// True for sub-agent (sidechain) turns rather than the main conversation thread.
-    pub is_sidechain: bool,
-    /// Sub-agent id for sidechain turns (links to `SubagentResult.agent_id`); empty on the
-    /// main thread. Lets us report the sub-agent's *actual* model, not the parent's.
-    pub agent_id: String,
+    /// Why the model stopped: `tool_use`, `end_turn`, `max_tokens`, … Empty when the record
+    /// predates the field or the response was cut off before it was written — the latter
+    /// being the signal that a run ended mid-generation.
+    pub stop_reason: String,
     /// API request id (or message id) for this assistant response. The `.jsonl` streams a
     /// response as several records that share this id; we keep only one per id so usage
     /// isn't multiply-counted. Empty when unknown (then no dedup).
@@ -111,6 +125,10 @@ impl ToolResultRec {
 pub struct SubagentResult {
     pub agent_type: String,
     pub agent_id: String,
+    /// `tool_use` id of the Agent call that spawned this sub-agent. Links the sub-agent's
+    /// sidechain records back to the exact turn that launched them, so the transcript can
+    /// nest them under it instead of dumping them at the end.
+    pub tool_use_id: String,
     /// The sub-agent's **actual** model, read from its sidechain turns (matched by
     /// `agent_id`) when present; otherwise the invoking turn's model. Filled in analysis.
     pub model: String,
@@ -126,6 +144,49 @@ pub struct SubagentResult {
     pub edit_count: u64,
     pub lines_added: u64,
     pub lines_removed: u64,
+}
+
+/// Sidecar metadata for one sub-agent, recorded when it is spawned rather than when it
+/// finishes — so an agent that never returned is still identifiable.
+#[derive(Debug, Clone, Default)]
+pub struct AgentMeta {
+    pub agent_type: String,
+    /// Human description given to the Agent call.
+    pub description: String,
+    /// `tool_use` id of the Agent call that spawned it.
+    pub tool_use_id: String,
+}
+
+/// A harness-emitted event attached to the conversation: a run-termination marker, an
+/// injected reminder, a hook result, memory pulled into context, …
+///
+/// These are logged as `type: "attachment"` records. They are not messages, so they used to
+/// be discarded — which made the most important question about a session ("why did it
+/// stop?") unanswerable, since `max_turns_reached` lives here and nowhere else.
+#[derive(Debug, Clone)]
+pub struct HarnessEvent {
+    /// Attachment subtype as logged, e.g. `max_turns_reached`, `task_reminder`.
+    pub subtype: String,
+    /// One-line human summary of the payload.
+    pub detail: String,
+    /// Content this event injected into the context, if any (hook output, memory file).
+    pub content: String,
+    /// True when this event marks the end of a run (turn/token limit, abort, error).
+    pub is_terminal: bool,
+    /// For a limit event, `(value reached, configured cap)` as numbers — so a caller never
+    /// has to parse them back out of `detail`.
+    pub limit: Option<(u64, u64)>,
+}
+
+/// A change to the set of tools the agent can reach on demand.
+///
+/// The harness logs these as `deferred_tools_delta` attachments. They are the **only**
+/// record of what an agent could actually do — without them, "was Bash available?" can be
+/// answered only by inference from what happened to be called.
+#[derive(Debug, Clone)]
+pub struct ToolRosterDelta {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 /// A context-compaction event.
@@ -145,6 +206,13 @@ pub enum ItemKind {
     ToolResult(ToolResultRec),
     Subagent(SubagentResult),
     Compact(CompactEvent),
+    Event(HarnessEvent),
+    /// Tools made available to (or withdrawn from) a thread.
+    ToolRoster(ToolRosterDelta),
+    /// Start of a new run (one SDK `query()` / one interactive prompt cycle) within a
+    /// session, as logged by the harness. A session file can hold several; turn limits
+    /// apply per run, not per session.
+    RunStart,
 }
 
 /// A timestamped, session-tagged event.
@@ -152,6 +220,8 @@ pub enum ItemKind {
 pub struct Item {
     pub session_id: String,
     pub ts_ms: i64,
+    /// Main thread or sub-agent sidechain (see [`Origin`]).
+    pub origin: Origin,
     pub kind: ItemKind,
 }
 
@@ -173,13 +243,16 @@ pub struct Dataset {
     pub entrypoints: BTreeMap<String, String>,
     /// sessionId -> service tier (e.g. "standard", "priority").
     pub service_tiers: BTreeMap<String, String>,
+    /// agentId -> sub-agent metadata, from the `.meta.json` written next to each
+    /// sub-agent's log. Covers agents that never returned a result.
+    pub agent_meta: BTreeMap<String, AgentMeta>,
     /// Lines that failed to parse.
     pub parse_errors: u64,
 }
 
 impl Dataset {
-    pub fn push(&mut self, session_id: impl Into<String>, ts_ms: i64, kind: ItemKind) {
-        self.items.push(Item { session_id: session_id.into(), ts_ms, kind });
+    pub fn push(&mut self, session_id: impl Into<String>, ts_ms: i64, origin: &Origin, kind: ItemKind) {
+        self.items.push(Item { session_id: session_id.into(), ts_ms, origin: origin.clone(), kind });
     }
 
     pub fn set_title(&mut self, session_id: impl Into<String>, title: impl Into<String>) {
@@ -218,6 +291,12 @@ impl Dataset {
         }
     }
 
+    pub fn note_agent_meta(&mut self, agent_id: &str, meta: AgentMeta) {
+        if !agent_id.is_empty() {
+            self.agent_meta.insert(agent_id.to_string(), meta);
+        }
+    }
+
     pub fn note_parse_error(&mut self) {
         self.parse_errors += 1;
     }
@@ -243,6 +322,9 @@ impl Dataset {
         }
         for (k, v) in other.service_tiers {
             self.service_tiers.entry(k).or_insert(v);
+        }
+        for (k, v) in other.agent_meta {
+            self.agent_meta.entry(k).or_insert(v);
         }
         self.parse_errors += other.parse_errors;
     }

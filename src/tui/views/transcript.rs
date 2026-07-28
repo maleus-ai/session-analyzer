@@ -3,7 +3,8 @@
 //! Rendered **windowed** — only the bubbles that fit the viewport are built each frame, so
 //! a transcript with thousands of turns stays responsive (no per-frame O(all) work).
 
-use crate::tui::app::App;
+use crate::tui::app::{App, TRow};
+use crate::tui::widgets::bubble::agent_row;
 use crate::tui::format::truncate;
 use crate::tui::widgets::bubble::bubble;
 use ratatui::prelude::*;
@@ -19,8 +20,23 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
 
-    let len = sr.transcript.len();
-    let title = format!(" Transcript — {}  ({} items) ", truncate(&sr.title, 40), len);
+    let view = app.transcript_view();
+    let len = view.len();
+    // Title carries the breadcrumb: which thread is open, and how to get back out.
+    let path = app.scope_path();
+    let title = if app.flatten {
+        format!(" Transcript — {}  ({} items, all threads inline) ", truncate(&sr.title, 34), len)
+    } else if app.t_scope.is_empty() {
+        let subs = sr.threads.len();
+        format!(
+            " Transcript — {}  ({} items{}) ",
+            truncate(&sr.title, 34),
+            len,
+            if subs > 0 { format!(" · {subs} sub-agent(s) collapsed") } else { String::new() }
+        )
+    } else {
+        format!(" {}  ({} items · Esc to go back) ", path, len)
+    };
     let mut block = Block::default().borders(Borders::ALL).title(title);
     if !app.search.is_empty() {
         block = block.title(Line::from(format!(" /{} (n/N) ", app.search)).right_aligned());
@@ -42,8 +58,22 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let lines = loop {
         let mut lines: Vec<Line> = Vec::new();
         let mut reached_sel = false;
-        for (i, it) in sr.transcript.iter().enumerate().skip(offset) {
-            let b = bubble(it, i == sel, w);
+        for (i, row) in view.iter().enumerate().skip(offset) {
+            // Depth is relative to the open thread, so its own messages sit flush and only
+            // what it spawned is indented.
+            let base = if app.flatten { 0 } else { app.t_scope.len() };
+            let b = match row {
+                TRow::Item(ti) => {
+                    let it = &sr.transcript[*ti];
+                    let d = it.agent.as_ref().map_or(0, |a| a.depth).saturating_sub(base);
+                    bubble(it, i == sel, w, d)
+                }
+                // A whole delegated conversation, standing in as one row.
+                TRow::Agent(id) => match sr.threads.iter().find(|t| &t.agent.id == id) {
+                    Some(t) => agent_row(t, i == sel, w, t.agent.depth.saturating_sub(base)),
+                    None => continue,
+                },
+            };
             if !lines.is_empty() && lines.len() + b.len() > h {
                 break;
             }

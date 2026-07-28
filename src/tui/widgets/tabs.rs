@@ -62,7 +62,7 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         match app.tab {
             1 => " click/Enter drill in · ↑↓ move · [ ] sort · r reverse · click header · q quit ",
-            2 => " ↑↓ bubbles · Enter expand · / search · Esc back · 1-9/0 tabs · q quit ",
+            2 => " ↑↓ bubbles · Enter expand / open sub-agent · Esc back out · a flat view · / search · q quit ",
             3 => " ↑↓ turns · Enter detail · [ ] sort · r reverse · Esc back · q quit ",
             4 | 5 | 6 | 7 | 8 => " ↑↓ move · Enter/click detail · [ ] sort · r reverse · q quit ",
             _ => " ←→/1-9/0 tabs · ↑↓ move · [ ] sort · r reverse · click to sort/select · q quit ",

@@ -30,6 +30,36 @@ pub trait Provider {
     /// response as several block-records, repeating the usage on each — they must be merged
     /// into one turn). Default: no-op.
     fn finalize(&self, _out: &mut Dataset) {}
+
+    /// Where this harness keeps its session logs, relative to `$HOME`. Used as the default
+    /// source for `ssa tar`.
+    fn default_home_dir(&self) -> &'static str {
+        ""
+    }
+
+    /// Classify one file (path relative to the capture root) for packaging. See
+    /// [`Capture`]. The default keeps nothing, so a provider must opt in explicitly —
+    /// a capture must never include a file just because nobody thought about it.
+    fn classify(&self, _rel_path: &str) -> Capture {
+        Capture::Skip
+    }
+}
+
+/// What `ssa tar` should do with a file it finds in a harness's data directory.
+///
+/// The default is to leave a file out. Session trees sit next to credentials, OAuth
+/// tokens and full config dumps, so packaging works from an allowlist: anything not
+/// recognised as session data is skipped, and anything recognised as a secret is reported
+/// so the user can see it was deliberately excluded rather than missed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    /// Session data — include it.
+    Include,
+    /// Known-sensitive (credentials, tokens, config that embeds them). Never included;
+    /// listed in the summary so the exclusion is visible.
+    Sensitive,
+    /// Not session data and not sensitive — quietly left out.
+    Skip,
 }
 
 /// All known providers.

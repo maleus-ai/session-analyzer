@@ -40,12 +40,14 @@ pub fn draw_transcript_popup(f: &mut Frame, app: &App, idx: usize) {
 pub fn draw_turn_popup(f: &mut Frame, app: &App, turn: usize) {
     let Some(sr) = app.focus_report() else { return };
     let area = centered(f.area(), 84, 84);
+    // `turn` is the session-wide sequence number; the title shows the per-thread one.
+    let title = sr.timeline.iter().find(|t| t.turn == turn).map(|t| t.display_turn()).unwrap_or_else(|| turn.to_string());
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(turn_detail_lines(sr, turn))
             .wrap(Wrap { trim: false })
             .scroll((app.popup_scroll, 0))
-            .block(theme::popup_block(&format!(" Turn {turn} — detail "))),
+            .block(theme::popup_block(&format!(" Turn {title} — detail "))),
         area,
     );
 }
@@ -86,8 +88,8 @@ fn detail_lines(app: &App, tab: usize, idx: usize) -> (String, Vec<Line<'static>
             // If a session is focused, list this tool's calls (targets) from the transcript.
             if let Some(sr) = app.focus_report() {
                 let calls: Vec<String> = sr.transcript.iter().filter_map(|it| match &it.kind {
-                    TKind::Assistant { turn, tools, .. } => {
-                        let hits: Vec<String> = tools.iter().filter(|x| x.name == t.name).map(|x| format!("  turn {turn}: {}", short_path(&x.target))).collect();
+                    TKind::Assistant { label, tools, .. } => {
+                        let hits: Vec<String> = tools.iter().filter(|x| x.name == t.name).map(|x| format!("  turn {label}: {}", short_path(&x.target))).collect();
                         if hits.is_empty() { None } else { Some(hits.join("\n")) }
                     }
                     _ => None,
@@ -140,31 +142,68 @@ fn detail_lines(app: &App, tab: usize, idx: usize) -> (String, Vec<Line<'static>
             (" Sink / cache-read source ".into(), out)
         }
         7 => {
-            // Sub-agents
-            let mut list = m.subagents.clone();
-            let _ = query::sort_subagents(&mut list, query::SUBAGENT_COLS[app.sort_col[7]], app.sort_desc[7]);
-            let Some(s) = list.get(idx) else { return ("Sub-agent".into(), vec![]) };
-            let out = vec![
-                kvl("Agent type", s.agent_type.clone()),
-                kvl("Model", short_model(&s.model)),
-                kvl("Agent id", s.agent_id.clone()),
+            // One sub-agent thread. Reconstructed from its messages, so an agent that never
+            // returned still has a detail page; the harness's own tool statistics are joined
+            // in only when a result record exists.
+            let mut list = crate::tui::views::subagents::threads(app);
+            let _ = query::sort_agent_threads(&mut list, query::AGENT_COLS[app.sort_col[7]], app.sort_desc[7]);
+            let Some((sr, t)) = list.get(idx).copied() else { return ("Sub-agent".into(), vec![]) };
+            let mut out = vec![
+                kvl("Agent", t.agent.label()),
+                kvl("Agent id", t.agent.id.clone()),
+                kvl("Type", t.agent.agent_type.clone()),
+                kvl("Depth", format!("{} (1 = spawned by the main thread)", t.agent.depth)),
+                kvl("Model", short_model(&t.model)),
+                kvl("Outcome", t.outcome.label().to_string()),
+            ];
+            if t.is_spinning(&sr.transcript) {
+                out.push(Line::from(Span::styled(
+                    "Every tool call this agent made spawned another agent — it did no work itself.",
+                    Style::default().fg(theme::BAD),
+                )));
+            }
+            if !t.agent.description.is_empty() {
+                out.push(Line::from(""));
+                out.push(section("TASK"));
+                push_block(&mut out, &t.agent.description, Color::White);
+            }
+            out.extend([
                 Line::from(""),
                 section("WORK"),
-                kvl("Total tokens", fmt_int(s.total_tokens)),
-                kvl("Tool calls", s.tool_use_count.to_string()),
-                kvl("Reads", s.read_count.to_string()),
-                kvl("Searches", s.search_count.to_string()),
-                kvl("Bash", s.bash_count.to_string()),
-                kvl("Edits", s.edit_count.to_string()),
-                kvl("Lines", format!("+{} / -{}", s.lines_added, s.lines_removed)),
-                kvl("Duration", format!("{:.1}s", s.duration_ms as f64 / 1000.0)),
+                kvl("Turns", t.turns.to_string()),
+                kvl("Tool calls", t.tool_calls.to_string()),
+                kvl("Tokens", fmt_int(t.usage.total())),
+                kvl("Cost", format!("${:.2}", t.cost_usd)),
+                kvl("Duration", crate::analysis::fmt_dur_ms(t.duration_ms())),
+                kvl("Transcript items", format!("{}–{}  (Transcript tab)", t.first_item, t.last_item)),
                 Line::from(""),
-                section("USAGE (last iteration)"),
-                kvl("cache read", fmt_int(s.usage.cache_read_input_tokens)),
-                kvl("cache write", fmt_int(s.usage.cache_creation_input_tokens)),
-                kvl("output", fmt_int(s.usage.output_tokens)),
-            ];
-            (format!(" Sub-agent — {} ", s.agent_type), out)
+                section("USAGE"),
+                kvl("cache read", fmt_int(t.usage.cache_read_input_tokens)),
+                kvl("cache write", fmt_int(t.usage.cache_creation_input_tokens)),
+                kvl("output", fmt_int(t.usage.output_tokens)),
+            ]);
+            // Only present for an agent that returned a result to its parent.
+            if let Some(s) = sr.metrics.subagents.iter().find(|s| s.agent_id == t.agent.id) {
+                out.push(Line::from(""));
+                out.push(section("HARNESS-REPORTED TOOL STATS"));
+                out.push(kvl("Reads", s.read_count.to_string()));
+                out.push(kvl("Searches", s.search_count.to_string()));
+                out.push(kvl("Bash", s.bash_count.to_string()));
+                out.push(kvl("Edits", s.edit_count.to_string()));
+                out.push(kvl("Lines", format!("+{} / -{}", s.lines_added, s.lines_removed)));
+                out.push(kvl("Reported tokens", format!("{} (a different measure — see SKILL.md)", fmt_int(s.total_tokens))));
+            } else {
+                out.push(Line::from(""));
+                out.push(Line::from(Span::styled(
+                    "No result record: this agent never returned to its parent, so the harness's",
+                    Style::default().fg(theme::MUTED),
+                )));
+                out.push(Line::from(Span::styled(
+                    "own tool statistics are unknown for it.",
+                    Style::default().fg(theme::MUTED),
+                )));
+            }
+            (format!(" Sub-agent — {} ", t.agent.label()), out)
         }
         8 => {
             // Issues
@@ -194,9 +233,17 @@ fn turn_detail_lines(sr: &SessionReport, turn: usize) -> Vec<Line<'static>> {
 
     if let Some(t) = tp {
         out.push(Line::from(Span::styled(
-            format!("Turn {} · {}", turn, t.model),
-            Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+            format!("Turn {} · {}", t.display_turn(), t.model),
+            Style::default()
+                .fg(if t.is_sidechain { theme::SIDECHAIN } else { Color::LightGreen })
+                .add_modifier(Modifier::BOLD),
         )));
+        if let Some(a) = &t.agent {
+            out.push(Line::from(Span::styled(
+                format!("sub-agent {} (depth {}) — not the main thread", a.label(), a.depth),
+                Style::default().fg(theme::SIDECHAIN),
+            )));
+        }
         let reason = est_tokens(assistant_thinking_len(sr, turn));
         let mut stats = Vec::new();
         stats.extend(tok_span("read", t.usage.cache_read_input_tokens, Color::Cyan));
@@ -259,8 +306,12 @@ fn turn_detail_lines(sr: &SessionReport, turn: usize) -> Vec<Line<'static>> {
                 }
             }
         }
+        // Stay on this turn's own thread: a turn that spawned a sub-agent has that agent's
+        // whole conversation spliced in before its own tool result.
+        let owner = sr.transcript[pos].agent.as_ref().map(|a| a.id.as_str());
         let results: Vec<&TItem> = sr.transcript[pos + 1..]
             .iter()
+            .filter(|it| it.agent.as_ref().map(|a| a.id.as_str()) == owner)
             .take_while(|it| !matches!(it.kind, TKind::Assistant { .. }))
             .filter(|it| matches!(it.kind, TKind::Tool { .. }))
             .collect();
@@ -316,8 +367,15 @@ fn clip_chars(s: &str, n: usize) -> String {
 }
 
 fn full_text(it: &TItem) -> String {
-    match &it.kind {
-        TKind::User { text, .. } => format!("USER\n\n{text}"),
+    let who = match &it.agent {
+        Some(a) => format!("sub-agent {} · depth {}\n\n", a.label(), a.depth),
+        None => String::new(),
+    };
+    let body = match &it.kind {
+        TKind::User { text, .. } => {
+            let tag = if it.agent.is_some() { "TASK FROM PARENT" } else { "USER" };
+            format!("{tag}\n\n{text}")
+        }
         TKind::Assistant { model, thinking, text, tools, .. } => {
             let mut s = format!("ASSISTANT ({model})\n");
             if !thinking.is_empty() {
@@ -333,5 +391,10 @@ fn full_text(it: &TItem) -> String {
         }
         TKind::Tool { tool, target, content, .. } => format!("TOOL RESULT · {tool} {target}\n\n{content}"),
         TKind::Compact { pre, post, trigger } => format!("COMPACTION ({trigger})\n{pre} → {post} tokens"),
-    }
+        TKind::Event { subtype, detail, content, is_terminal } => {
+            let mark = if *is_terminal { "RUN ENDED" } else { "HARNESS EVENT" };
+            format!("{mark} · {subtype}\n\n{detail}\n\n{content}")
+        }
+    };
+    format!("{who}{body}")
 }

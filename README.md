@@ -84,21 +84,45 @@ downstream (analysis, TUI, CLI) is provider-agnostic.
 | `projects` | per-project (working-directory) totals across a `.claude` tree |
 | `models` | per-model turns / tokens / fresh tokens / cost |
 | `compare` | 2+ sessions side by side (repeat `--session`) |
-| `tools` | per-tool calls, result-token footprint, errors |
+| `tools` | per-tool calls, result-token footprint, errors (`--available` for the tool roster) |
+| `audit <capture>` | inspect an archive you were handed for leaked credentials |
+| `runs` / `trace` | per-run outcomes; one line per turn (`--depth`/`--min-depth` to slice a chain) |
 | `sinks` | token sinks ranked by **amplified cost** (size × turns resident) |
 | `cache-attr` | decomposition of cache-read by the content that stayed resident |
-| `subagents` | per sub-agent tokens, tool counts, reads/edits, lines changed |
+| `subagents` | per sub-agent tokens, tool counts, reads/edits, lines changed (agents that finished) |
+| `agents` | every sub-agent conversation, finished or not: id, type, depth, turns, timing, outcome |
+| `runs` | the session's runs (SDK query / prompt cycle) and how each ended — incl. turn-limit hits |
+| `trace --session ID` | one line per turn: time, thread, tools called — the "what did it do" view |
 | `timeline --session ID` | per-turn context size, Δctx, write/read/out, cost, spikes |
 | `growth --session ID` | context-growth sparkline + detected spikes |
 | `spikes` | anomalous context-growth turns + their cause |
-| `transcript --session ID` | ordered bubbles (user/assistant/tool/compact) with tokens |
+| `search --grep TEXT` | find messages across every session **and sub-agent**; prints locators |
+| `transcript --session ID` | ordered bubbles (user/assistant/tool/compact) with tokens, sub-agents nested |
 | `show --session ID --item N` | full text of one transcript item (msg / tool io) |
-| `issues` | detected inefficiencies |
+| `issues [--session ID]` | detected inefficiencies **and control-flow failures** (run outcomes, delegation loops) |
+| `tar <provider>` | package session logs into a shareable `.tar.gz`, **excluding credentials** |
 
 Common flags: `--format text\|json\|csv`, `--session <id-prefix>`, `--sort <col>`,
-`--desc`, `--top N`, `--provider <id>`. `transcript` also takes `--kind
-user\|assistant\|tool\|compact` and `--full` (full text). Sort columns per view are
-listed in `src/query.rs` (e.g. sinks: `amplified|size|calls|residency|contribution`).
+`--desc`, `--top N`, `--provider <id>`. Sort columns per view are listed in `src/query.rs`
+(e.g. sinks: `amplified|size|calls|residency|contribution`).
+
+`search`, `transcript` and `trace` share a selection vocabulary: `--grep TEXT`,
+`--input-grep TEXT` (tool arguments), `--regex`, `--kind
+user\|assistant\|tool\|compact\|event`, `--thread all\|main\|sub`,
+`--agent <id/type/description>`, `--tool <name>`, `--run N`, `--since`/`--until`
+(`HH:MM[:SS]` or `YYYY-MM-DD HH:MM`), `--from N` / `--limit N` (paging by item index),
+`--context N` (messages around each hit), and `--full` (complete text, `transcript` only).
+So:
+
+```sh
+ssa runs -p LOG --session 14574d2b                        # how did each run end
+ssa trace -p LOG --session 14574d2b --run 2               # one line per turn
+ssa search -p LOG --grep "regression"                     # where is it, across all threads
+ssa search -p LOG --kind event                            # turn limits, hooks, reminders
+ssa transcript -p LOG --session 14574d2b --thread main    # just the human-facing thread
+ssa agents -p LOG --session 14574d2b                      # what was delegated to whom
+ssa transcript -p LOG --session 14574d2b --agent Explore --full
+```
 
 The old `--cli --report <section>` form still works as a deprecated alias.
 
@@ -108,9 +132,22 @@ Tabs: **Overview · Sessions · Transcript · Timeline · Tools · Sinks · Cach
 Sub-agents · Issues · Rate**. Transcript/Timeline are per-session — open one from Sessions.
 The **Rate** tab shows throughput over wall-clock time and the peak rolling window.
 
+Overview leads with how each **run** ended and any tool the agent asked for and could not
+get; **Tools** flags those unavailable tools above the usage table; **Sub-agents** lists
+every delegated conversation in chain order with its depth and outcome. All of it mirrors
+the headless commands (`runs`, `tools --available`, `agents`).
+
 **Keyboard**: `←/→` or `1`–`9`/`0` switch tabs (`0` = Rate) · `↑/↓` move · `PgUp/PgDn` page ·
 `[` / `]` change sort column · `r` reverse sort · `Enter` drill into a session /
-expand a transcript bubble · `Esc` back · `q` quit.
+expand a transcript bubble · `/` search the transcript (`n`/`N` next/prev) · `Esc` back ·
+`q` quit.
+
+In the **Transcript**, each sub-agent is collapsed to a single summary row (turns, tokens,
+cost, outcome). `Enter` on it opens that conversation as its own transcript with a
+breadcrumb (`main ▸ Explore#a221ec`); `Esc` walks back out one level. `a` switches to a flat
+view with every thread inline. The **Timeline** plots the main thread and sub-agents as
+separate series, because each has its own context window — a merged line makes an agent
+starting and finishing look like a compaction that never happened.
 
 **Mouse**: click a tab, click a **column header** to sort (click again to reverse),
 click a row to select, scroll wheel to move/scroll, click a bubble to expand.
@@ -132,9 +169,17 @@ click a row to select, scroll wheel to move/scroll, click a bubble to expand.
   **spikes**, attributed to what was added just before them.
 - **Transcript**: full ordered messages with per-message token stats, so you can read a
   session and see exactly where writes/reads/sinks occur.
-- **Sub-agents**: per-agent tokens, tool mix, reads/searches/bash/edits, lines changed.
+- **Sub-agents**: every sub-agent conversation — finished or not — with nesting depth,
+  outcome, duration and the transcript range to read it.
+- **Thread attribution**: sub-agent logs carry the *parent's* `sessionId`, so every message
+  is tagged with the agent that produced it and nested under the turn that spawned it —
+  main-thread turns are numbered 1..N and each sub-agent restarts at 1.
+- **Control flow**: the session's runs and how each ended (clean finish, turn/token limit,
+  ended mid-generation, API error), read from the harness `attachment` records that carry
+  markers like `max_turns_reached`.
 - **Inefficiencies**: low cache hit, churn, repeated reads, cache-read sinks, context
-  spikes, tool/API errors, auto-compactions, heavy sub-agents.
+  spikes, tool/API errors, auto-compactions, heavy sub-agents, **delegation loops** and
+  identical tool calls repeated.
 
 ## Token accounting notes
 

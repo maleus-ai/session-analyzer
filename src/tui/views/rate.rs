@@ -27,7 +27,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         section_line("THROUGHPUT & CONTINUITY"),
         kv("Span (first→last)", &human(r.span_ms)),
-        kv("Active time", &format!("{}  ({} idle >15m)", human(r.active_ms), r.idle_gaps)),
+        // Same wording as `overview` and the CLI: a pause shorter than the 15-minute
+        // rate-window threshold must still be visible.
+        kv("Active time", &format!("{}  ({} paused, max {})", human(r.active_ms), human(r.idle_ms), human(r.longest_gap_ms))),
         kv("Turns", &fmt_int(r.turns)),
         kv_val("Cache-write /active-h", &per_h(r.total_cache_write as f64 / ah), Color::Magenta),
         kv_val("Fresh /active-h", &per_h(r.total_fresh as f64 / ah), Color::Yellow),

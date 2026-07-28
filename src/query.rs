@@ -124,3 +124,37 @@ pub fn sort_timeline(v: &mut [&TurnPoint], col: &str, desc: bool) -> Result<()> 
 pub fn sinks_only(cache_attr: &[CacheContrib]) -> Vec<CacheContrib> {
     cache_attr.iter().filter(|c| !c.is_baseline).cloned().collect()
 }
+
+/// Sort `agents` rows. `None` (no `--sort`) keeps first-appearance order, which is the
+/// order a delegation chain actually happened in.
+/// `seq` (first appearance) is first so the default view reads as the delegation chain
+/// happened, matching the CLI's default order.
+pub const AGENT_COLS: &[&str] = &["seq", "depth", "tokens", "turns", "cost", "tools", "start", "duration"];
+
+pub fn sort_agent_threads(
+    v: &mut [(&crate::analysis::SessionReport, &crate::analysis::AgentThread)],
+    col: &str,
+    desc: bool,
+) -> anyhow::Result<()> {
+    if !AGENT_COLS.contains(&col) {
+        anyhow::bail!("unknown sort column '{}'; valid: {}", col, AGENT_COLS.join("|"));
+    }
+    let key = |t: &crate::analysis::AgentThread| -> f64 {
+        match col {
+            "seq" => t.first_item as f64,
+            "depth" => t.agent.depth as f64,
+            "tokens" => t.usage.total() as f64,
+            "turns" => t.turns as f64,
+            "cost" => t.cost_usd,
+            "tools" => t.tool_calls as f64,
+            "start" => t.start_ms as f64,
+            "duration" => t.duration_ms() as f64,
+            _ => 0.0,
+        }
+    };
+    v.sort_by(|a, b| {
+        let (x, y) = (key(a.1), key(b.1));
+        if desc { y.total_cmp(&x) } else { x.total_cmp(&y) }
+    });
+    Ok(())
+}

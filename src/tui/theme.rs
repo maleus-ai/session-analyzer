@@ -10,6 +10,9 @@ use ratatui::widgets::{Block, Borders};
 pub const USER: Color = Color::Blue;
 pub const ASSISTANT: Color = Color::Green;
 pub const ACCENT: Color = Color::Cyan;
+/// Sub-agent (sidechain) conversation — deliberately distinct from USER/ASSISTANT so a
+/// delegated turn never reads as the main thread's.
+pub const SIDECHAIN: Color = Color::LightMagenta;
 pub const MUTED: Color = Color::DarkGray;
 pub const GOOD: Color = Color::Green;
 pub const WARN: Color = Color::Yellow;
