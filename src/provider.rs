@@ -37,6 +37,32 @@ pub trait Provider {
         ""
     }
 
+    /// Environment variable that relocates this harness's config directory, if it has one.
+    /// Checked before `$HOME/<default_home_dir>`, so a relocated install is still found.
+    fn config_dir_env(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Where this harness's data actually lives: the relocation env var if set, else
+    /// `$HOME/<default_home_dir>`. `None` when the provider declares no location or the
+    /// directory does not exist.
+    fn config_dir(&self) -> Option<std::path::PathBuf> {
+        if let Some(var) = self.config_dir_env()
+            && let Some(v) = std::env::var_os(var)
+        {
+            let p = std::path::PathBuf::from(v);
+            if p.is_dir() {
+                return Some(p);
+            }
+        }
+        let dir = self.default_home_dir();
+        if dir.is_empty() {
+            return None;
+        }
+        let p = std::path::PathBuf::from(std::env::var_os("HOME")?).join(dir);
+        p.is_dir().then_some(p)
+    }
+
     /// Classify one file (path relative to the capture root) for packaging. See
     /// [`Capture`]. The default keeps nothing, so a provider must opt in explicitly —
     /// a capture must never include a file just because nobody thought about it.

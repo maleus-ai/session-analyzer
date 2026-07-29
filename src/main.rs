@@ -41,7 +41,7 @@ use std::path::PathBuf;
 struct Cli {
     /// Session logs to analyze: a folder, a .jsonl, an archive (.zip/.tar/.tar.gz/.tgz),
     /// or a .claude project tree. Repeatable (`-p A -p B`) to merge multiple sources.
-    /// Defaults to ./data then ~/.claude.
+    /// Defaults to ./data, then $CLAUDE_CONFIG_DIR if set, then ~/.claude.
     #[arg(short = 'p', long, global = true, value_name = "PATH")]
     path: Vec<PathBuf>,
 
@@ -541,7 +541,7 @@ struct TarArgs {
     /// Harness whose logs to package (e.g. `claude`). Defaults to the only known provider.
     #[arg(value_name = "PROVIDER")]
     provider: Option<String>,
-    /// Directory to package; defaults to the provider's location under $HOME (~/.claude)
+    /// Directory to package. Defaults to $CLAUDE_CONFIG_DIR if set, else ~/.claude
     #[arg(long, value_name = "PATH")]
     source: Option<PathBuf>,
     /// Package only this session (id prefix match) and its sub-agent logs
@@ -776,7 +776,16 @@ fn run_tar(o: &TarArgs) -> Result<()> {
     let source = match &o.source {
         Some(p) => p.clone(),
         None => capture::default_source(prov.as_ref())
-            .ok_or_else(|| anyhow::anyhow!("no {} directory found under $HOME; pass --source", prov.display_name()))?,
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no {} directory found{}; pass --source <PATH>",
+                    prov.display_name(),
+                    match prov.config_dir_env() {
+                        Some(v) => format!(" at ${v} or under $HOME"),
+                        None => " under $HOME".into(),
+                    }
+                )
+            })?,
     };
     let plan = capture::plan(prov.as_ref(), &source, o.session.as_deref())?;
 

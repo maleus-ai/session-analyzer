@@ -46,7 +46,8 @@ ssa -p <PATH>      # no command → interactive TUI (needs a TTY; not for agents
 ```
 
 `PATH` = a folder, a single `.jsonl`, an archive (`.zip`/`.tar`/`.tar.gz`/`.tgz`), or a
-`.claude` project tree. For `.claude` trees only `projects/**` is read and results are
+`.claude` project tree. With no `-p`, the default is `./data`, then `$CLAUDE_CONFIG_DIR` if
+set, then `~/.claude`. For `.claude` trees only `projects/**` is read and results are
 grouped per project. `-p` is **repeatable** (`-p A -p B`) to merge sources — e.g.
 `pressure`/`compare` an archive against `~/.claude` in one run. **Agents should always
 pass `--format json`** and parse it — do not scrape the text tables.
@@ -170,6 +171,7 @@ such an archive holds the user's credentials.
 ssa tar claude --dry-run              # show exactly what would be included and excluded
 ssa tar claude -o session.tar.gz      # package ~/.claude, credentials excluded
 ssa tar claude --session 14574d2b     # just one session and its sub-agent logs
+ssa tar claude --source /path/to/.claude   # a tree that is not the default location
 ssa audit capture.tar.gz              # the reverse: does a capture you were HANDED leak?
 ```
 

@@ -101,6 +101,10 @@ impl Provider for ClaudeCodeProvider {
         ".claude"
     }
 
+    fn config_dir_env(&self) -> Option<&'static str> {
+        Some("CLAUDE_CONFIG_DIR")
+    }
+
     /// A `.claude` tree holds live OAuth credentials and full config dumps beside the
     /// session logs. Package only what `ssa` actually reads — `projects/**` logs and the
     /// sub-agent sidecars — and name the secrets explicitly so their exclusion is visible.

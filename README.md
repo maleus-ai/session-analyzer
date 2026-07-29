@@ -67,7 +67,9 @@ ssa overview -p PATH --format json
 ```
 
 The path is a global option: pass it with `-p`/`--path`, or as the leading positional for
-the TUI (`ssa PATH`). Omitted, it defaults to `./data` then `~/.claude`.
+the TUI (`ssa PATH`). Omitted, it defaults to `./data`, then `$CLAUDE_CONFIG_DIR` if set,
+then `~/.claude`. `ssa tar` resolves its default source the same way, and `--source PATH`
+overrides both.
 
 Run `ssa --help` for the command list, and `ssa <command> --help`
 for a command's options (including its valid `--sort` columns).

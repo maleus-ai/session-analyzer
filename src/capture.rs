@@ -47,13 +47,7 @@ impl Plan {
 
 /// Resolve the directory to package: an explicit path, else `$HOME/<provider default>`.
 pub fn default_source(prov: &dyn Provider) -> Option<PathBuf> {
-    let dir = prov.default_home_dir();
-    if dir.is_empty() {
-        return None;
-    }
-    let home = std::env::var_os("HOME")?;
-    let p = PathBuf::from(home).join(dir);
-    p.is_dir().then_some(p)
+    prov.config_dir()
 }
 
 /// Decide what a capture of `root` would contain. Nothing is written.

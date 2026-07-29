@@ -320,17 +320,15 @@ fn source_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Best-effort default input when none is supplied: `./data`, else `~/.claude`.
+/// Best-effort default input when none is supplied: `./data`, else the first registered
+/// provider's config directory (`$CLAUDE_CONFIG_DIR`, else `~/.claude`).
+///
+/// This runs before provider auto-detection, so it asks every provider where its data
+/// lives rather than hardcoding one harness's layout.
 pub fn default_path() -> Option<PathBuf> {
     let data = PathBuf::from("data");
     if data.is_dir() {
         return Some(data);
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let c = PathBuf::from(home).join(".claude");
-        if c.is_dir() {
-            return Some(c);
-        }
-    }
-    None
+    provider::registry().iter().find_map(|p| p.config_dir())
 }
